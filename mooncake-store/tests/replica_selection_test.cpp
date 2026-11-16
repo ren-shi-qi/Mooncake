@@ -67,6 +67,23 @@ Replica::Descriptor MakeLocalDisk(const std::string& endpoint) {
     return d;
 }
 
+// Build a VSEGMENT replica descriptor. A vsegment spans multiple member
+// endpoints, so it has no single transport endpoint of its own.
+Replica::Descriptor MakeVSegment(
+    const std::string& vsegment_id,
+    ReplicaStatus status = ReplicaStatus::COMPLETE) {
+    Replica::Descriptor d;
+    d.id = 0;
+    VSegmentDescriptor vsegment;
+    vsegment.partition_id = "partition-a";
+    vsegment.vsegment_id = vsegment_id;
+    vsegment.logical_offset = 0;
+    vsegment.length = 1024;
+    d.descriptor_variant = vsegment;
+    d.status = status;
+    return d;
+}
+
 // A test fixture that guarantees scoring state is reset between tests, since
 // the enable flag / injected scorer are process-wide.
 class ReplicaSelectionTest : public ::testing::Test {
@@ -355,6 +372,47 @@ TEST_F(ReplicaSelectionTest, ConcurrentSetAndSelectIsRaceFree) {
 
     EXPECT_FALSE(selection_failed.load());
     EXPECT_EQ(read_count.load(), kIterations * kReaderThreads);
+}
+
+// --- VSEGMENT: selectable, ranked below memory/nof, above disk ----------
+
+TEST_F(ReplicaSelectionTest, VSegmentSelectedWhenOnlyOption) {
+    std::unordered_set<std::string> local;  // nothing local
+    std::vector<Replica::Descriptor> reps = {MakeVSegment("vsegment-only")};
+    const auto* sel = SelectBestReplica(reps, local);
+    ASSERT_NE(sel, nullptr);
+    ASSERT_TRUE(sel->is_vsegment_replica());
+    EXPECT_EQ(sel->get_vsegment_descriptor().vsegment_id, "vsegment-only");
+}
+
+TEST_F(ReplicaSelectionTest, VSegmentRanksBelowMemory) {
+    std::unordered_set<std::string> local;
+    std::vector<Replica::Descriptor> reps = {
+        MakeVSegment("vsegment-first"),  // first in master order
+        MakeMemory("nodeA", "tcp"),
+    };
+    const auto* sel = SelectBestReplica(reps, local);
+    ASSERT_NE(sel, nullptr);
+    EXPECT_TRUE(sel->is_memory_replica());
+}
+
+TEST_F(ReplicaSelectionTest, VSegmentOutranksDisk) {
+    std::unordered_set<std::string> local;
+    std::vector<Replica::Descriptor> reps = {
+        MakeDisk("path-a"),
+        MakeVSegment("vsegment-a"),
+        MakeLocalDisk("nodeD"),
+    };
+    const auto* sel = SelectBestReplica(reps, local);
+    ASSERT_NE(sel, nullptr);
+    EXPECT_TRUE(sel->is_vsegment_replica());
+}
+
+TEST_F(ReplicaSelectionTest, IncompleteVSegmentIsNotSelected) {
+    std::unordered_set<std::string> local;
+    std::vector<Replica::Descriptor> reps = {
+        MakeVSegment("vsegment-processing", ReplicaStatus::PROCESSING)};
+    EXPECT_EQ(SelectBestReplica(reps, local), nullptr);
 }
 
 }  // namespace

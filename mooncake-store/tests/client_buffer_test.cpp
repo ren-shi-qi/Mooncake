@@ -468,6 +468,45 @@ TEST_F(ClientBufferTest, AllocateSlicesZeroSizeMemoryReplica) {
     EXPECT_EQ(slices[0].ptr, handle.ptr());
 }
 
+// Test calculate_total_size function with vsegment replica: the logical length
+// of the vsegment descriptor is what the client has to materialise.
+TEST_F(ClientBufferTest, CalculateTotalSizeVSegmentReplica) {
+    Replica::Descriptor replica;
+    VSegmentDescriptor vsegment;
+    vsegment.partition_id = "partition-a";
+    vsegment.vsegment_id = "vsegment-0001";
+    vsegment.logical_offset = 4096;
+    vsegment.length = 8192;
+
+    replica.descriptor_variant = vsegment;
+    replica.status = ReplicaStatus::COMPLETE;
+
+    ASSERT_TRUE(replica.is_vsegment_replica());
+    EXPECT_EQ(calculate_total_size(replica), 8192u);
+}
+
+// Test allocateSlices function with vsegment replica: a vsegment is one
+// logical range, so the client gets exactly one slice covering its length.
+TEST_F(ClientBufferTest, AllocateSlicesVSegmentReplica) {
+    Replica::Descriptor replica;
+    VSegmentDescriptor vsegment;
+    vsegment.partition_id = "partition-a";
+    vsegment.vsegment_id = "vsegment-0001";
+    vsegment.logical_offset = 0;
+    vsegment.length = 4096;
+
+    replica.descriptor_variant = vsegment;
+    replica.status = ReplicaStatus::COMPLETE;
+
+    std::vector<Slice> slices;
+    int result = allocateSlices(slices, replica, reinterpret_cast<void*>(0x3000));
+
+    EXPECT_EQ(result, 0);
+    ASSERT_EQ(slices.size(), 1u);
+    EXPECT_EQ(slices[0].ptr, reinterpret_cast<void*>(0x3000));
+    EXPECT_EQ(slices[0].size, 4096u);
+}
+
 }  // namespace mooncake
 
 int main(int argc, char** argv) {
