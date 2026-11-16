@@ -4377,8 +4377,14 @@ tl::expected<int64_t, ErrorCode> RealClient::execute_ranged_read(
             total_size);
     }
 
-    if (!replica.is_memory_replica()) {
-        LOG(ERROR) << "partial ranged reads only support memory replicas";
+    // vsegment 与 memory 一样支持按 src_offset 的部分读：底层的
+    // Client::Get(key, query, slices, src_offset) 会先把 replica.logical_offset
+    // 平移 src_offset，再按新的 [offset, length) 重新规划条带子请求
+    // （client_service.cpp 的 TransferReadInternal）。所以这里只需放行，
+    // 不需要为 vsegment 单独实现一条范围读路径。
+    if (!replica.is_memory_replica() && !replica.is_vsegment_replica()) {
+        LOG(ERROR) << "partial ranged reads only support memory or vsegment "
+                      "replicas";
         return tl::unexpected(ErrorCode::INVALID_REPLICA);
     }
 
@@ -6399,8 +6405,8 @@ RealClient::batch_get_into_multi_buffers_internal(
             continue;
         }
         // Select the best replica using the shared policy. This multi-buffer
-        // implementation still rejects direct replica classes other than
-        // MEMORY below.
+        // implementation accepts MEMORY and VSEGMENT below (both are written
+        // through per-buffer slices); disk classes take their own path.
         const auto *best_replica =
             SelectBestReplica(query_result_values.replicas, local_endpoints);
         if (!best_replica) {
@@ -6434,8 +6440,10 @@ RealClient::batch_get_into_multi_buffers_internal(
         const auto &buffers = all_buffers[i];
         std::vector<Slice> key_slices;
         key_slices.reserve(buffers.size());
-        if (replica.is_memory_replica()) {
+        if (replica.is_memory_replica() || replica.is_vsegment_replica()) {
             // MEMORY: RDMA from remote memory directly to GPU (GPUDirect).
+            // VSEGMENT: identical per-buffer slices — the planner maps each
+            // slice onto its stripe member, so the same zero-copy path works.
             for (size_t j = 0; j < buffers.size(); ++j) {
                 key_slices.emplace_back(Slice{buffers[j], sizes[j]});
             }
