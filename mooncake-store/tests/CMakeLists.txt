@@ -7,7 +7,7 @@ function(add_store_test name)
            transfer_engine
            cachelib_memory_allocator
            ${ETCD_WRAPPER_LIB}
-           glog
+           glog::glog
            ibverbs
            gtest
            gtest_main
@@ -43,7 +43,7 @@ function(add_ha_test name)
            transfer_engine
            cachelib_memory_allocator
            ${ETCD_WRAPPER_LIB}
-           glog
+           glog::glog
            gflags
            ibverbs
            gtest
@@ -205,7 +205,7 @@ if(STORE_USE_REDIS)
            transfer_engine
            cachelib_memory_allocator
            ${ETCD_WRAPPER_LIB}
-           glog
+           glog::glog
            gflags
            ibverbs
            gtest
@@ -225,7 +225,7 @@ target_link_libraries(
          transfer_engine
          cachelib_memory_allocator
          ${ETCD_WRAPPER_LIB}
-         glog
+         glog::glog
          gtest
          gtest_main
          pthread)
@@ -256,7 +256,7 @@ target_link_libraries(
          cachelib_memory_allocator
          ${ETCD_WRAPPER_LIB}
          mooncake_common
-         glog
+         glog::glog
          gflags
          pthread)
 
