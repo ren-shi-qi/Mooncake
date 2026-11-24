@@ -56,6 +56,12 @@ int RealStoreAdapter::UpsertFrom(const std::string &key, void *buffer,
     return client_->upsert_from(key, buffer, size, MakeConfig(replica_num_));
 }
 
+int RealStoreAdapter::BatchUpsert(
+    const std::vector<std::string> &keys,
+    const std::vector<std::span<const char>> &values) {
+    return client_->upsert_batch(keys, values, MakeConfig(replica_num_));
+}
+
 std::vector<int> RealStoreAdapter::BatchUpsertFrom(
     const std::vector<std::string> &keys, const std::vector<void *> &buffers,
     const std::vector<size_t> &sizes) {
@@ -91,6 +97,12 @@ std::vector<BufferView> RealStoreAdapter::BatchGetBuffer(
         views.push_back(std::move(view));
     }
     return views;
+}
+
+std::vector<int64_t> RealStoreAdapter::BatchGetInto(
+    const std::vector<std::string> &keys, const std::vector<void *> &buffers,
+    const std::vector<size_t> &sizes) {
+    return client_->batch_get_into(keys, buffers, sizes);
 }
 
 int64_t RealStoreAdapter::GetInto(const std::string &key, void *buffer,

@@ -30,6 +30,9 @@ class RealStoreAdapter final : public StoreAdapter {
 
     int Upsert(const std::string &key, std::span<const char> value) override;
     int UpsertFrom(const std::string &key, void *buffer, size_t size) override;
+    int BatchUpsert(
+        const std::vector<std::string> &keys,
+        const std::vector<std::span<const char>> &values) override;
     std::vector<int> BatchUpsertFrom(
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers,
@@ -39,6 +42,10 @@ class RealStoreAdapter final : public StoreAdapter {
     std::vector<BufferView> BatchGetBuffer(
         const std::vector<std::string> &keys) override;
     int64_t GetInto(const std::string &key, void *buffer, size_t size) override;
+    std::vector<int64_t> BatchGetInto(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers,
+        const std::vector<size_t> &sizes) override;
 
     int IsExist(const std::string &key) override;
     std::vector<int> BatchIsExist(

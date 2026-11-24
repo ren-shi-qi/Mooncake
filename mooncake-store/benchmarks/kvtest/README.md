@@ -67,11 +67,14 @@ configured.
 | `batch_put_from` | — | `RealClient::batch_put_from` with registered buffers |
 | `upsert` | `setStringView` | `RealClient::upsert` |
 | `upsert_from` | `upsertFrom` | `RealClient::upsert_from` with a registered buffer |
+| `batch_upsert` | `upsert_batch` | `RealClient::upsert_batch` |
 | `batch_upsert_from` | `mSet` | `RealClient::batch_upsert_from` |
 | `get` | — | `RealClient::get_buffer` + copy |
 | `get_buffer` | `getBuffer` | `RealClient::get_buffer` |
-| `get_batch` | `mGet` | `RealClient::batch_get_buffer` |
+| `get_batch` | — | `RealClient::batch_get_buffer` + copy |
+| `batch_get_buffer` | `batchGetBuffer`, `mGet` | `RealClient::batch_get_buffer` without copy |
 | `get_into` | — | `RealClient::get_into` with a registered read buffer |
+| `batch_get_into` | — | `RealClient::batch_get_into` with registered read buffers |
 | `exist` | `isExist` | `RealClient::isExist` |
 | `batch_exist` | `batchIsExist` | `RealClient::batchIsExist` |
 | `remove` | `del` | `RealClient::remove` |

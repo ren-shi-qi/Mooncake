@@ -42,6 +42,9 @@ class StoreAdapter {
                        std::span<const char> value) = 0;
     virtual int UpsertFrom(const std::string &key, void *buffer,
                            size_t size) = 0;
+    virtual int BatchUpsert(
+        const std::vector<std::string> &keys,
+        const std::vector<std::span<const char>> &values) = 0;
     virtual std::vector<int> BatchUpsertFrom(
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers,
@@ -52,6 +55,10 @@ class StoreAdapter {
         const std::vector<std::string> &keys) = 0;
     virtual int64_t GetInto(const std::string &key, void *buffer,
                             size_t size) = 0;
+    virtual std::vector<int64_t> BatchGetInto(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers,
+        const std::vector<size_t> &sizes) = 0;
 
     virtual int IsExist(const std::string &key) = 0;
     virtual std::vector<int> BatchIsExist(

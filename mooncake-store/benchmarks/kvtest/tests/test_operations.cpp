@@ -145,6 +145,41 @@ TEST(OperationsTest, BatchOperationsRecordOneSample) {
     EXPECT_EQ(get_op->total, 1u);
 }
 
+TEST(OperationsTest, BatchReadInterfaces) {
+    Harness harness(32, {"a", "b", "c"});
+    const OpOutcome put = harness.Run("put_batch");
+    EXPECT_TRUE(put.ok);
+
+    const OpOutcome batch_buffer = harness.Run("batch_get_buffer");
+    EXPECT_TRUE(batch_buffer.ok);
+    EXPECT_EQ(batch_buffer.bytes, 96u);
+
+    RegisteredBuffer read_buffer;
+    ASSERT_TRUE(read_buffer.Create(harness.store, 32, 3));
+    harness.context.read_buffer = &read_buffer;
+    const OpOutcome batch_into = harness.Run("batch_get_into");
+    EXPECT_TRUE(batch_into.ok);
+    EXPECT_EQ(batch_into.bytes, 96u);
+
+    const OpOutcome batch_upsert = harness.Run("batch_upsert");
+    EXPECT_TRUE(batch_upsert.ok);
+    EXPECT_EQ(batch_upsert.bytes, 96u);
+
+    auto snapshots = harness.metrics.SnapshotCounts();
+    const MetricSnapshot *buffer_op =
+        FindSnapshot(snapshots, "batch_get_buffer");
+    ASSERT_NE(buffer_op, nullptr);
+    EXPECT_EQ(buffer_op->total, 1u);
+    const MetricSnapshot *into_op =
+        FindSnapshot(snapshots, "batch_get_into");
+    ASSERT_NE(into_op, nullptr);
+    EXPECT_EQ(into_op->total, 1u);
+    const MetricSnapshot *upsert_op =
+        FindSnapshot(snapshots, "batch_upsert");
+    ASSERT_NE(upsert_op, nullptr);
+    EXPECT_EQ(upsert_op->total, 1u);
+}
+
 TEST(OperationsTest, ExistAndRemove) {
     Harness harness(16, {"k"});
     EXPECT_EQ(harness.Run("exist").status, RecordStatus::kMiss);
@@ -180,9 +215,11 @@ TEST(OperationsTest, PutErrorIsClassified) {
 TEST(OperationsTest, AliasesMapToCanonicalNames) {
     EXPECT_EQ(CanonicalName("setStringView"), "upsert");
     EXPECT_EQ(CanonicalName("upsertFrom"), "upsert_from");
+    EXPECT_EQ(CanonicalName("upsert_batch"), "batch_upsert");
     EXPECT_EQ(CanonicalName("mSet"), "batch_upsert_from");
     EXPECT_EQ(CanonicalName("getBuffer"), "get_buffer");
-    EXPECT_EQ(CanonicalName("mGet"), "get_batch");
+    EXPECT_EQ(CanonicalName("batchGetBuffer"), "batch_get_buffer");
+    EXPECT_EQ(CanonicalName("mGet"), "batch_get_buffer");
     EXPECT_EQ(CanonicalName("isExist"), "exist");
     EXPECT_EQ(CanonicalName("batchRemove"), "batch_remove");
     EXPECT_TRUE(FindOp("no_such_op") == nullptr);

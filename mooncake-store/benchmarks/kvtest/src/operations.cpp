@@ -24,14 +24,20 @@ constexpr OpSpec kSpecs[] = {
      false, "setStringView", "", ""},
     {OpKind::kUpsertFrom, "upsert_from", OpSide::kWrite, false, true, false,
      true, false, "upsertFrom", "", ""},
+    {OpKind::kBatchUpsert, "batch_upsert", OpSide::kWrite, true, false, false,
+     true, false, "upsert_batch", "", ""},
     {OpKind::kBatchUpsertFrom, "batch_upsert_from", OpSide::kWrite, true, true,
      false, true, false, "batchUpsertFrom", "mSet", ""},
     {OpKind::kGet, "get", OpSide::kRead, false, false, false, false, true, "",
      "", ""},
     {OpKind::kGetBatch, "get_batch", OpSide::kRead, true, false, false, false,
-     true, "mGet", "", ""},
+     true, "", "", ""},
+    {OpKind::kBatchGetBuffer, "batch_get_buffer", OpSide::kRead, true, false,
+     false, false, true, "batchGetBuffer", "mGet", ""},
     {OpKind::kGetInto, "get_into", OpSide::kRead, false, false, true, false,
      true, "", "", ""},
+    {OpKind::kBatchGetInto, "batch_get_into", OpSide::kRead, true, false, true,
+     false, true, "", "", ""},
     {OpKind::kGetBuffer, "get_buffer", OpSide::kRead, false, false, false,
      false, true, "getBuffer", "", ""},
     {OpKind::kExist, "exist", OpSide::kRead, false, false, false, false, false,
@@ -258,6 +264,14 @@ OpOutcome ExecuteOp(StoreAdapter &store, const OpSpec &spec,
             }
             break;
         }
+        case OpKind::kBatchUpsert: {
+            const auto start = Steady::now();
+            const int rc = store.BatchUpsert(keys, context.scratch->spans);
+            const double latency = ElapsedMs(start);
+            record(latency,
+                   rc == 0 ? Ok(value_size * count) : Error(rc));
+            break;
+        }
         case OpKind::kPutFrom:
         case OpKind::kUpsertFrom: {
             for (size_t i = 0; i < count; ++i) {
@@ -414,6 +428,50 @@ OpOutcome ExecuteOp(StoreAdapter &store, const OpSpec &spec,
             record(latency, outcome);
             break;
         }
+        case OpKind::kBatchGetBuffer: {
+            const auto start = Steady::now();
+            const std::vector<BufferView> views = store.BatchGetBuffer(keys);
+            const double latency = ElapsedMs(start);
+            if (views.size() != count) {
+                record(latency, Error(-3, "batch-size"));
+                break;
+            }
+            RecordStatus worst = RecordStatus::kOk;
+            std::string reason;
+            for (size_t i = 0; i < count; ++i) {
+                if (!views[i]) {
+                    worst = RecordStatus::kMiss;
+                    break;
+                }
+                if (views[i].size != value_size) {
+                    worst = RecordStatus::kMismatch;
+                    reason = "size";
+                    break;
+                }
+            }
+            if (worst == RecordStatus::kOk) {
+                for (size_t i = 0; i < count; ++i) {
+                    if (!VerifyRead(context, views[i].ptr, views[i].size,
+                                    &reason)) {
+                        worst = RecordStatus::kMismatch;
+                        if (options.metrics != nullptr) {
+                            options.metrics->RecordVerifyFailure();
+                        }
+                        break;
+                    }
+                }
+            }
+            OpOutcome outcome;
+            if (worst == RecordStatus::kOk) {
+                outcome = Ok(value_size * count);
+            } else if (worst == RecordStatus::kMiss) {
+                outcome = Miss();
+            } else {
+                outcome = Mismatch(reason, options.fail_on_verify);
+            }
+            record(latency, outcome);
+            break;
+        }
         case OpKind::kGetInto: {
             if (context.read_buffer == nullptr ||
                 !context.read_buffer->Valid() ||
@@ -448,6 +506,66 @@ OpOutcome ExecuteOp(StoreAdapter &store, const OpSpec &spec,
                 }
                 record(latency, outcome);
             }
+            break;
+        }
+        case OpKind::kBatchGetInto: {
+            if (context.read_buffer == nullptr ||
+                !context.read_buffer->Valid() ||
+                context.read_buffer->Slots() < count ||
+                context.read_buffer->Stride() < value_size) {
+                return Error(-2, "no usable registered read buffer");
+            }
+            context.scratch->ptrs.resize(count);
+            context.scratch->sizes.assign(count, context.read_buffer->Stride());
+            for (size_t i = 0; i < count; ++i) {
+                context.scratch->ptrs[i] = context.read_buffer->At(i);
+            }
+            const auto start = Steady::now();
+            const std::vector<int64_t> results = store.BatchGetInto(
+                keys, context.scratch->ptrs, context.scratch->sizes);
+            const double latency = ElapsedMs(start);
+            if (results.size() != count) {
+                record(latency, Error(-3, "batch-size"));
+                break;
+            }
+            RecordStatus worst = RecordStatus::kOk;
+            std::string reason;
+            int first_error = 0;
+            for (size_t i = 0; i < count; ++i) {
+                if (results[i] < 0) {
+                    worst = RecordStatus::kError;
+                    first_error = static_cast<int>(results[i]);
+                    break;
+                }
+                if (static_cast<uint64_t>(results[i]) != value_size) {
+                    worst = RecordStatus::kMismatch;
+                    reason = "size";
+                    break;
+                }
+            }
+            if (worst == RecordStatus::kOk) {
+                for (size_t i = 0; i < count; ++i) {
+                    if (!VerifyRead(context, context.read_buffer->At(i),
+                                    value_size, &reason)) {
+                        worst = RecordStatus::kMismatch;
+                        if (options.metrics != nullptr) {
+                            options.metrics->RecordVerifyFailure();
+                        }
+                        break;
+                    }
+                }
+            }
+            OpOutcome outcome;
+            if (worst == RecordStatus::kOk) {
+                outcome = Ok(value_size * count);
+            } else if (worst == RecordStatus::kError) {
+                outcome = Error(first_error);
+            } else if (worst == RecordStatus::kMiss) {
+                outcome = Miss();
+            } else {
+                outcome = Mismatch(reason, options.fail_on_verify);
+            }
+            record(latency, outcome);
             break;
         }
         case OpKind::kExist: {

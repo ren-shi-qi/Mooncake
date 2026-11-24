@@ -72,6 +72,11 @@ class FakeStore final : public StoreAdapter {
         return PutFrom(key, buffer, size);
     }
 
+    int BatchUpsert(const std::vector<std::string> &keys,
+                    const std::vector<std::span<const char>> &values) override {
+        return PutBatch(keys, values);
+    }
+
     std::vector<int> BatchUpsertFrom(
         const std::vector<std::string> &keys,
         const std::vector<void *> &buffers,
@@ -107,6 +112,18 @@ class FakeStore final : public StoreAdapter {
         if (it->second.size() > size) return -2;
         std::memcpy(buffer, it->second.data(), it->second.size());
         return static_cast<int64_t>(it->second.size());
+    }
+
+    std::vector<int64_t> BatchGetInto(
+        const std::vector<std::string> &keys,
+        const std::vector<void *> &buffers,
+        const std::vector<size_t> &sizes) override {
+        std::vector<int64_t> results;
+        results.reserve(keys.size());
+        for (size_t i = 0; i < keys.size(); ++i) {
+            results.push_back(GetInto(keys[i], buffers[i], sizes[i]));
+        }
+        return results;
     }
 
     int IsExist(const std::string &key) override {
