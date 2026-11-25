@@ -6,15 +6,41 @@
 #include <ylt/coro_rpc/coro_rpc_client.hpp>
 #include <ylt/coro_rpc/coro_rpc_server.hpp>
 
+#include <glog/logging.h>
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
+#include <thread>
 #include <utility>
 
 namespace mooncake::kvtest {
 namespace {
 
 using RpcClientPool = coro_io::client_pool<coro_rpc::coro_rpc_client>;
+
+// Deadline for NotifyRpcServer::Stop(). ylt's coro_rpc_server::stop() has no
+// timeout of its own, so a stuck connection or handler must not be able to
+// keep the benchmark process alive after /stop. 0 restores the original
+// unbounded (graceful) behaviour.
+std::chrono::milliseconds NotifyServerStopTimeout() {
+    static const auto timeout = [] {
+        constexpr auto kDefault = std::chrono::milliseconds(5000);
+        const char *value = std::getenv("MC_KVTEST_NOTIFY_STOP_TIMEOUT_MS");
+        if (value == nullptr || *value == '\0') return kDefault;
+        char *end = nullptr;
+        const long ms = std::strtol(value, &end, 10);
+        if (end == value || *end != '\0' || ms < 0) {
+            LOG(WARNING) << "Invalid MC_KVTEST_NOTIFY_STOP_TIMEOUT_MS="
+                         << value << ", using " << kDefault.count() << " ms";
+            return kDefault;
+        }
+        return std::chrono::milliseconds(ms);
+    }();
+    return timeout;
+}
 
 struct CallResult {
     bool ok{false};
@@ -104,8 +130,48 @@ bool NotifyRpcServer::Start(std::string *error) {
 
 void NotifyRpcServer::Stop() {
     if (!impl_ || !impl_->started) return;
-    impl_->server.stop();
     impl_->started = false;
+
+    // ylt's coro_rpc_server::stop() stops its io_context pool with
+    // force=false: it only drops the work guard and then joins the io
+    // threads, so each io_context::run() returns only after every pending
+    // connection coroutine and handler has finished. An idle keep-alive
+    // connection (writers keep notify connections pooled) or an in-flight
+    // Notify handler therefore keeps that join blocked forever, which shows
+    // up as a hung process on /stop. Force-stopping the pool first makes
+    // every io_context::run() return immediately, so stop() can join its
+    // threads. The graceful connection drain is intentionally skipped: the
+    // caller is terminating and no further notify is expected.
+    impl_->server.get_io_context_pool().stop(/*force=*/true);
+
+    const auto timeout = NotifyServerStopTimeout();
+    if (timeout.count() <= 0) {
+        impl_->server.stop();
+        return;
+    }
+
+    // Safety net: even with the forced pool stop, a library-side wait must
+    // not be able to keep the process alive forever during shutdown.
+    std::atomic<bool> finished{false};
+    std::thread stopper([this, &finished] {
+        impl_->server.stop();
+        finished.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!finished.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (finished.load(std::memory_order_acquire)) {
+        stopper.join();
+        return;
+    }
+    LOG(WARNING) << "NotifyRpcServer::Stop did not finish within "
+                 << timeout.count()
+                 << " ms; exiting without the graceful coro_rpc shutdown";
+    // The helper thread is still inside the library and holds this object,
+    // so let the process exit without running further destructors.
+    std::_Exit(EXIT_SUCCESS);
 }
 
 struct NotifyRpcClient::Impl {
